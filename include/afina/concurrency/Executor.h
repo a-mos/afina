@@ -27,8 +27,9 @@ class Executor {
 
         // Threadppol is stopped
         kStopped
-    };
+    };;
 
+public:
     Executor(size_t low_watermark, size_t hight_watermark, size_t max_queue_size, size_t idle_time)
         : _low_watermark(low_watermark), _hight_watermark(hight_watermark), _max_queue_size(max_queue_size),
           _idle_time(idle_time) {
@@ -43,66 +44,66 @@ class Executor {
         _current_working = 0;
     }
 
-    ~Executor() { Stop(true); };
-
-    /**
-     * Signal thread pool to stop, it will stop accepting new jobs and close threads just after each become
-     * free. All enqueued jobs will be complete.
-     *
-     * In case if await flag is true, call won't return until all background jobs are done and all threads are stopped
-     */
-    void Stop(bool await = false) {
-        std::unique_lock<std::mutex> lock(mutex);
-        state = State::kStopping;
-        empty_condition.notify_all();
-        if (await) {
-            while (state != State::kStopped) {
-                stop.wait(lock);
-            }
+/**
+ * Signal thread pool to stop, it will stop accepting new jobs and close threads just after each become
+ * free. All enqueued jobs will be complete.
+ *
+ * In case if await flag is true, call won't return until all background jobs are done and all threads are stopped
+ */
+void Stop(bool await = false) {
+    std::unique_lock<std::mutex> lock(mutex);
+    state = State::kStopping;
+    empty_condition.notify_all();
+    if (await) {
+        while (state != State::kStopped) {
+            stop.wait(lock);
         }
     }
+}
 
-    /**
-     * Add function to be executed on the threadpool. Method returns true in case if task has been placed
-     * onto execution queue, i.e scheduled for execution and false otherwise.
-     *
-     * That function doesn't wait for function result. Function could always be written in a way to notify caller about
-     * execution finished by itself
-     */
-    template <typename F, typename... Types> bool Execute(F &&func, Types... args) {
-        // Prepare "task"
-        auto exec = std::bind(std::forward<F>(func), std::forward<Types>(args)...);
+/**
+ * Add function to be executed on the threadpool. Method returns true in case if task has been placed
+ * onto execution queue, i.e scheduled for execution and false otherwise.
+ *
+ * That function doesn't wait for function result. Function could always be written in a way to notify caller about
+ * execution finished by itself
+ */
+template <typename F, typename... Types> bool Execute(F &&func, Types... args) {
+    // Prepare "task"
+    auto exec = std::bind(std::forward<F>(func), std::forward<Types>(args)...);
 
-        std::unique_lock<std::mutex> lock(this->mutex);
-        if (state != State::kRun) {
-            return false;
-        }
-
-        // Enqueue new task
-        // Have not busy threads
-        if (threads.size() - _current_working > 0) {
-            tasks.push_back(exec);
-            empty_condition.notify_one();
-            return true;
-        }
-
-        // All busy, can create new
-        if (_current_working < _hight_watermark) {
-            std::thread t(&Executor::perform, this);
-            t.detach();
-            threads.push_back(std::move(t));
-            tasks.push_back(exec);
-            return true;
-        }
-
-        // All busy, cant create new
-        if (tasks.size() < _max_queue_size) {
-            tasks.push_back(exec);
-            return true;
-        }
-
+    std::unique_lock<std::mutex> lock(this->mutex);
+    if (state != State::kRun) {
         return false;
     }
+
+    // Enqueue new task
+    // Have not busy threads
+    if (threads.size() - _current_working > 0) {
+        tasks.push_back(exec);
+        empty_condition.notify_one();
+        return true;
+    }
+
+    // All busy, can create new
+    if (_current_working < _hight_watermark) {
+        std::thread t = std::thread([this]() { perform(this); });
+        t.detach();
+        threads.push_back(std::move(t));
+        tasks.push_back(exec);
+        return true;
+    }
+
+    // All busy, cant create new
+    if (tasks.size() < _max_queue_size) {
+        tasks.push_back(exec);
+        return true;
+    }
+
+    return false;
+}
+
+    ~Executor() { Stop(true); }
 
 private:
     // No copy/move/assign allowed
@@ -111,10 +112,6 @@ private:
     Executor &operator=(const Executor &); // = delete;
     Executor &operator=(Executor &&);      // = delete;
 
-    /**
-     * Main function that all pool threads are running. It polls internal task queue and execute tasks
-     */
-
     void kill() {
         auto pid = std::this_thread::get_id();
         auto it = threads.begin();
@@ -122,10 +119,14 @@ private:
             if (it->get_id() == pid) {
                 break;
             }
+            it++;
         }
-        it->detach();
         threads.erase(it);
     }
+
+    /**
+    * Main function that all pool threads are running. It polls internal task queue and execute tasks
+    */
 
     void perform(Executor *executor) {
         while (executor->state != State::kStopped) {

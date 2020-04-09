@@ -36,7 +36,6 @@ ServerImpl::~ServerImpl() {}
 
 // See Server.h
 void ServerImpl::Start(uint16_t port, uint32_t n_accept, uint32_t n_workers) {
-    _n_workers = n_workers;
     _logger = pLogging->select("network");
     _logger->info("Start mt_blocking network service");
 
@@ -76,12 +75,16 @@ void ServerImpl::Start(uint16_t port, uint32_t n_accept, uint32_t n_workers) {
 
     running.store(true);
     _thread = std::thread(&ServerImpl::OnRun, this);
+
+    Executor = new Concurrency::Executor(1, n_workers, 10, 5000);
 }
 
 // See Server.h
 void ServerImpl::Stop() {
     running.store(false);
     shutdown(_server_socket, SHUT_RDWR);
+    Executor->Stop(true);
+    delete Executor;
 }
 
 // See Server.h
@@ -98,7 +101,6 @@ void ServerImpl::OnRun() {
     // - command_to_execute: last command parsed out of stream
     // - arg_remains: how many bytes to read from stream to get command argument
     // - argument_for_command: buffer stores argument
-    _num_working = 0;
     std::size_t arg_remains;
     Protocol::Parser parser;
     std::string argument_for_command;
@@ -135,27 +137,8 @@ void ServerImpl::OnRun() {
             setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv);
         }
 
-        if (_num_working < _n_workers) {
-            std::thread(&ServerImpl::Worker, this, client_socket).detach();
-            {
-                std::unique_lock<std::mutex> lock(_m);
-                _num_working++;
-                _sockets.insert(client_socket);
-            }
-        } else {
+        if (!running.load() || !Executor->Execute(&ServerImpl::Worker, this, client_socket)) {
             close(client_socket);
-        }
-    }
-
-    // After ServerImpl::Stop called
-    {
-        std::unique_lock<std::mutex> lock(_m);
-        for (auto sock_fd : _sockets) {
-            shutdown(sock_fd, SHUT_RD);
-        }
-        _sockets.clear();
-        while (_num_working > 0) {
-            _cv.wait(lock);
         }
     }
     // Cleanup on exit...
@@ -250,19 +233,6 @@ void ServerImpl::Worker(int client_socket) {
 
     // We are done with this connection
     close(client_socket);
-
-    // Prepare for the next command: just in case if connection was closed in the middle of executing something
-    command_to_execute.reset();
-    argument_for_command.resize(0);
-    parser.Reset();
-    {
-        std::unique_lock<std::mutex> lock(_m);
-        _sockets.erase(client_socket);
-        _num_working--;
-    }
-    if (_num_working == 0) {
-        _cv.notify_one();
-    }
 }
 } // namespace MTblocking
 } // namespace Network
