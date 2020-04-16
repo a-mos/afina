@@ -82,6 +82,13 @@ void ServerImpl::Start(uint16_t port, uint32_t n_accept, uint32_t n_workers) {
 void ServerImpl::Stop() {
     running.store(false);
     shutdown(_server_socket, SHUT_RDWR);
+    {
+        std::unique_lock<std::mutex> lock(_m);
+        for (auto sock_fd : _sockets) {
+            shutdown(sock_fd, SHUT_RD);
+        }
+        _sockets.clear();
+    }
 }
 
 // See Server.h
@@ -89,6 +96,12 @@ void ServerImpl::Join() {
     assert(_thread.joinable());
     _thread.join();
     close(_server_socket);
+    {
+        std::unique_lock<std::mutex> lock(_m);
+        while (_num_working > 0) {
+            _cv.wait(lock);
+        }
+    }
 }
 
 // See Server.h
@@ -135,27 +148,15 @@ void ServerImpl::OnRun() {
             setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv);
         }
 
-        if (_num_working < _n_workers) {
-            std::thread(&ServerImpl::Worker, this, client_socket).detach();
+        if (_num_working < _n_workers && running.load()) {
             {
                 std::unique_lock<std::mutex> lock(_m);
+                std::thread(&ServerImpl::Worker, this, client_socket).detach();
                 _num_working++;
                 _sockets.insert(client_socket);
             }
         } else {
             close(client_socket);
-        }
-    }
-
-    // After ServerImpl::Stop called
-    {
-        std::unique_lock<std::mutex> lock(_m);
-        for (auto sock_fd : _sockets) {
-            shutdown(sock_fd, SHUT_RD);
-        }
-        _sockets.clear();
-        while (_num_working > 0) {
-            _cv.wait(lock);
         }
     }
     // Cleanup on exit...
@@ -167,13 +168,13 @@ void ServerImpl::Worker(int client_socket) {
     // - read commands until socket alive
     // - execute each command
     // - send response
-    std::size_t arg_remains;
+    std::size_t arg_remains = 0;
     Protocol::Parser parser;
     std::string argument_for_command;
     std::unique_ptr<Execute::Command> command_to_execute;
     try {
         int readed_bytes = -1;
-        char client_buffer[4096];
+        char client_buffer[4096] = "";;
         while ((readed_bytes = read(client_socket, client_buffer, sizeof(client_buffer))) > 0) {
             _logger->debug("Got {} bytes from socket", readed_bytes);
 
@@ -261,7 +262,7 @@ void ServerImpl::Worker(int client_socket) {
         _num_working--;
     }
     if (_num_working == 0) {
-        _cv.notify_one();
+        _cv.notify_all();
     }
 }
 } // namespace MTblocking

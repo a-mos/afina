@@ -59,8 +59,8 @@ private:
     std::unordered_set<int> _sockets;
     std::mutex _m;
     std::condition_variable _cv;
-    uint32_t _num_working;
-    uint32_t _n_workers;
+    std::atomic<uint32_t> _num_working;
+    std::atomic<uint32_t> _n_workers;
 
 };
 
