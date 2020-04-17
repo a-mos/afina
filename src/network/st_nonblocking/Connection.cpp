@@ -2,6 +2,7 @@
 
 #include <iostream>
 #include <sys/socket.h>
+#include <sys/uio.h>
 
 namespace Afina {
 namespace Network {
@@ -12,19 +13,19 @@ void Connection::Start() {
     std::cout << "Start" << std::endl;
     _event.data.fd = _socket;
     _event.data.ptr = this;
-    _event.events = EPOLLIN;
+    _event.events = EPOLLIN | EPOLLRDHUP | EPOLLERR;
 }
 
 // See Connection.h
 void Connection::OnError() {
     std::cout << "OnError" << std::endl;
-    is_Alive = false;
+        _is_Alive = false;
 }
 
 // See Connection.h
 void Connection::OnClose() {
     std::cout << "OnClose" << std::endl;
-    is_Alive = false;
+    _is_Alive = false;
 }
 
 // See Connection.h
@@ -36,14 +37,14 @@ void Connection::DoRead() {
     // - send response
     try {
         int readed_bytes = -1;
-        while ((readed_bytes = read(_socket, client_buffer, sizeof(client_buffer))) > 0) {
+        while (isAlive() && (readed_bytes = read(_socket, client_buffer + _read_offset, sizeof(client_buffer) - _read_offset)) > 0) {
             _logger->debug("Got {} bytes from socket", readed_bytes);
-
+            readed_bytes += _read_offset;
             // Single block of data readed from the socket could trigger inside actions a multiple times,
             // for example:
             // - read#0: [<command1 start>]
             // - read#1: [<command1 end> <argument> <command2> <argument for command 2> <command3> ... ]
-            while (readed_bytes > 0) {
+            while (readed_bytes > 0 && isAlive()) {
                 _logger->debug("Process {} bytes", readed_bytes);
                 // There is no command yet
                 if (!command_to_execute) {
@@ -78,19 +79,19 @@ void Connection::DoRead() {
                     std::memmove(client_buffer, client_buffer + to_read, readed_bytes - to_read);
                     arg_remains -= to_read;
                     readed_bytes -= to_read;
+                    _read_offset = readed_bytes;
                 }
 
                 // Thre is command & argument - RUN!
                 if (command_to_execute && arg_remains == 0) {
                     _logger->debug("Start command execution");
-
                     std::string result;
                     command_to_execute->Execute(*pStorage, argument_for_command, result);
 
                     // Send response
                     result += "\r\n";
                     _to_write.push_back(result);
-                    _event.events = EPOLLOUT | EPOLLRDHUP | EPOLLERR;
+                    _event.events |= EPOLLOUT;
                     // Prepare for the next command
                     command_to_execute.reset();
                     argument_for_command.resize(0);
@@ -99,8 +100,8 @@ void Connection::DoRead() {
             } // while (readed_bytes)
         }
 
-        is_Alive = false;
         if (readed_bytes == 0) {
+            _is_Alive = false;
             _logger->debug("Connection closed");
         } else {
             throw std::runtime_error(std::string(strerror(errno)));
@@ -113,17 +114,34 @@ void Connection::DoRead() {
 // See Connection.h
 void Connection::DoWrite() {
     std::cout << "DoWrite" << std::endl;
-    int count = 0;
-    for (count = 0; count < _to_write.size(); ++count) {
-        if (send(_socket, _to_write[count].data(), _to_write[count].size(), 0) <= 0) {
+    struct iovec out[_to_write.size()];
+    for (size_t i = 1; i < _to_write.size(); i++) {
+        out[i].iov_base = &_to_write[i][0];
+        out[i].iov_len = _to_write[i].size();
+    }
+    out[0].iov_base = &_to_write[0][0] + _write_offset;
+    out[0].iov_len = _to_write[0].size() - _write_offset;
+
+    ssize_t written = writev(_socket, out, _to_write.size());
+
+    if (written <= 0) {
+        throw std::runtime_error("Failed to send response");
+    }
+
+    for (size_t i = 0; i < _to_write.size(); i++) {
+        if (written >= out[i].iov_len) {
+            written -= out[i].iov_len;
+            _to_write.pop_front();
+        } else {
+            _write_offset = written;
             break;
         }
     }
 
-    _to_write.erase(_to_write.begin(), _to_write.begin() + count);
-
-    if (_to_write.empty()) {
+    if (_to_write.empty()){
         _event.events = EPOLLIN | EPOLLRDHUP | EPOLLERR;
+    } else {
+        _event.events = EPOLLOUT | EPOLLIN | EPOLLRDHUP | EPOLLERR;
     }
 }
 

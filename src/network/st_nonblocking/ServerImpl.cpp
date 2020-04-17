@@ -84,7 +84,7 @@ void ServerImpl::Start(uint16_t port, uint32_t n_acceptors, uint32_t n_workers) 
 // See Server.h
 void ServerImpl::Stop() {
     _logger->warn("Stop network service");
-
+    close(_server_socket);
     // Wakeup threads that are sleep on epoll_wait
     if (eventfd_write(_event_fd, 1)) {
         throw std::runtime_error("Failed to wakeup workers");
@@ -149,7 +149,7 @@ void ServerImpl::OnRun() {
                 if (current_event.events & EPOLLIN) {
                     pc->DoRead();
                 }
-                if (pc->_event.events & EPOLLOUT) {
+                if (current_event.events & EPOLLOUT) {
                     pc->DoWrite();
                 }
             }
@@ -161,7 +161,6 @@ void ServerImpl::OnRun() {
                 }
                 close(pc->_socket);
                 connections.erase(pc);
-                pc->OnClose();
                 delete pc;
             } else if (pc->_event.events != old_mask) {
                 if (epoll_ctl(epoll_descr, EPOLL_CTL_MOD, pc->_socket, &pc->_event)) {
@@ -219,6 +218,7 @@ void ServerImpl::OnNewConnection(int epoll_descr) {
         if (pc->isAlive()) {
             if (epoll_ctl(epoll_descr, EPOLL_CTL_ADD, pc->_socket, &pc->_event)) {
                 pc->OnError();
+                close(pc->_socket);
                 connections.erase(pc);
                 delete pc;
             }

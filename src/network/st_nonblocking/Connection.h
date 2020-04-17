@@ -6,6 +6,7 @@
 #include <spdlog/logger.h>
 #include <protocol/Parser.h>
 #include <afina/execute/Command.h>
+#include <deque>
 
 namespace Afina {
 namespace Network {
@@ -14,12 +15,12 @@ namespace STnonblock {
 class Connection {
 public:
     Connection(int s, std::shared_ptr<Afina::Storage> ps, std::shared_ptr<spdlog::logger> pl):
-    _socket(s), pStorage(ps), _logger(pl), is_Alive(true) {
+            _socket(s), pStorage(ps), _logger(pl), _is_Alive(true) {
         std::memset(&_event, 0, sizeof(struct epoll_event));
         _event.data.ptr = this;
     }
     inline bool isAlive() const {
-        return is_Alive;
+        return _is_Alive;
     }
     void Start();
 
@@ -40,14 +41,16 @@ private:
 
     std::shared_ptr<Afina::Storage> pStorage;
 
-    bool is_Alive;
+    bool _is_Alive;
 
     std::size_t arg_remains;
     Protocol::Parser parser;
     std::string argument_for_command;
     std::unique_ptr<Execute::Command> command_to_execute;
     char client_buffer[4096];
-    std::vector<std::string> _to_write;
+    size_t _read_offset = 0;
+    size_t _write_offset = 0;
+    std::deque<std::string> _to_write;
 };
 
 } // namespace STnonblock
