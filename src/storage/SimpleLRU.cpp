@@ -54,6 +54,7 @@ bool SimpleLRU::Put(const std::string &key, const std::string &value) {
         while (_cur_size - tmp.value.size() + value.size() > _max_size) {
             remove_node(_lru_head->next.get());
         }
+        _cur_size += value.size() - tmp.value.size();
         tmp.value = value;
     }
     return true;
