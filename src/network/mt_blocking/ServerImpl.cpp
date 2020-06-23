@@ -77,6 +77,7 @@ void ServerImpl::Start(uint16_t port, uint32_t n_accept, uint32_t n_workers) {
     _thread = std::thread(&ServerImpl::OnRun, this);
 
     Executor = new Concurrency::Executor(1, n_workers, 10, 5000);
+    Executor->Start();
 }
 
 // See Server.h

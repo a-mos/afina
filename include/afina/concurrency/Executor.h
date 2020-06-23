@@ -32,18 +32,7 @@ class Executor {
 public:
     Executor(size_t low_watermark, size_t hight_watermark, size_t max_queue_size, size_t idle_time)
         : _low_watermark(low_watermark), _hight_watermark(hight_watermark), _max_queue_size(max_queue_size),
-          _idle_time(idle_time) {
-
-        std::unique_lock<std::mutex> lock(mutex);
-        state = State::kRun;
-        for (int i = 0; i < _low_watermark; ++i) {
-            std::thread t = std::thread([this]() { perform(this); });
-            t.detach();
-            threads.push_back(std::move(t));
-        }
-        _current_working = 0;
-    }
-
+          _idle_time(idle_time) {}
 /**
  * Signal thread pool to stop, it will stop accepting new jobs and close threads just after each become
  * free. All enqueued jobs will be complete.
@@ -52,15 +41,29 @@ public:
  */
 void Stop(bool await = false) {
     std::unique_lock<std::mutex> lock(mutex);
-    state = State::kStopping;
+    if (state == State::kRun) {
+        state = State::kStopping;
+    }
     empty_condition.notify_all();
-    if (await) {
+    if (await && !threads.empty()) {
         while (state != State::kStopped) {
             stop.wait(lock);
         }
+    } else if (threads.empty()) {
+        state = State::kStopped;
     }
 }
 
+void Start() {
+    std::unique_lock<std::mutex> lock(mutex);
+    for (int i = 0; i < _low_watermark; ++i) {
+        std::thread t = std::thread([this]() { perform(this); });
+        t.detach();
+        threads.push_back(std::move(t));
+    }
+    state = State::kRun;
+    _current_working = 0;
+}
 /**
  * Add function to be executed on the threadpool. Method returns true in case if task has been placed
  * onto execution queue, i.e scheduled for execution and false otherwise.
@@ -164,7 +167,9 @@ private:
                 executor->tasks.pop_front();
             }
             _current_working++;
-            task();
+            try {
+                task();
+            } catch (const std::exception& e) {}
             _current_working--;
         }
     }
