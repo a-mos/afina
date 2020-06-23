@@ -53,6 +53,7 @@ private:
     size_t _write_offset = 0;
     std::deque<std::string> _to_write;
     std::mutex _m;
+    size_t MAXSIZE = 64;
 };
 
 } // namespace MTnonblock
