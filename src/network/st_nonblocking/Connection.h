@@ -50,6 +50,7 @@ private:
     char client_buffer[4096];
     size_t _read_offset = 0;
     size_t _write_offset = 0;
+    size_t MAXSIZE = 64;
     std::deque<std::string> _to_write;
 };
 

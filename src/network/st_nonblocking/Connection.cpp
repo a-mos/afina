@@ -10,27 +10,21 @@ namespace STnonblock {
 
 // See Connection.h
 void Connection::Start() {
-    std::cout << "Start" << std::endl;
-    _event.data.fd = _socket;
-    _event.data.ptr = this;
     _event.events = EPOLLIN | EPOLLRDHUP | EPOLLERR;
 }
 
 // See Connection.h
 void Connection::OnError() {
-    std::cout << "OnError" << std::endl;
-        _is_Alive = false;
+    _is_Alive = false;
 }
 
 // See Connection.h
 void Connection::OnClose() {
-    std::cout << "OnClose" << std::endl;
     _is_Alive = false;
 }
 
 // See Connection.h
 void Connection::DoRead() {
-    std::cout << "DoRead" << std::endl;
     // Process new connection:
     // - read commands until socket alive
     // - execute each command
@@ -113,32 +107,34 @@ void Connection::DoRead() {
 
 // See Connection.h
 void Connection::DoWrite() {
-    std::cout << "DoWrite" << std::endl;
-    struct iovec out[_to_write.size()];
-    for (size_t i = 1; i < _to_write.size(); i++) {
+    struct iovec out[MAXSIZE];
+    size_t SIZE_TO_WRITE = std::min(_to_write.size(), MAXSIZE);
+    for (size_t i = 1; i < SIZE_TO_WRITE; i++) {
         out[i].iov_base = &_to_write[i][0];
         out[i].iov_len = _to_write[i].size();
     }
     out[0].iov_base = &_to_write[0][0] + _write_offset;
     out[0].iov_len = _to_write[0].size() - _write_offset;
 
-    ssize_t written = writev(_socket, out, _to_write.size());
+    ssize_t written = writev(_socket, out, SIZE_TO_WRITE);
 
-    if (written <= 0) {
+    if (written < 0) {
         throw std::runtime_error("Failed to send response");
     }
 
-    for (size_t i = 0; i < _to_write.size(); i++) {
+    written += _write_offset;
+    for (size_t i = 0; i < SIZE_TO_WRITE; i++) {
         if (written >= out[i].iov_len) {
             written -= out[i].iov_len;
             _to_write.pop_front();
         } else {
-            _write_offset = written;
             break;
         }
     }
 
-    if (_to_write.empty()){
+    _write_offset = written;
+
+    if (_to_write.empty()) {
         _event.events = EPOLLIN | EPOLLRDHUP | EPOLLERR;
     } else {
         _event.events = EPOLLOUT | EPOLLIN | EPOLLRDHUP | EPOLLERR;
