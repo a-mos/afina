@@ -111,12 +111,6 @@ public:
         }
     }
 
-    void unblock_all() {
-        for (auto coro = blocked; coro != nullptr; coro = blocked) {
-            unblock(coro);
-        }
-    }
-
     context *get_cur_routine() {
         return cur_routine;
     }
